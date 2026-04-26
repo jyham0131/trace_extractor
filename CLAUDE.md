@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 프로젝트 개요
 
-장애 발생 시 로그 파일에서 거래 추적번호를 기반으로 관련 로그를 추출·분석하는 **PyQt6 데스크탑 UI** 도구. PyInstaller로 exe 빌드 가능.
+장애 발생 시 로그 파일에서 거래 추적번호를 기반으로 관련 로그를 추출·분석하는 **tkinter 데스크탑 UI** 도구. PyInstaller로 exe 빌드 가능.
 
 ---
 
@@ -49,7 +49,7 @@ Claude_Pro/
 ├── trace_extractor.py   # 3단계 분석 로직
 ├── xlog_handler.py      # Xlog 릴레이 추적번호 처리
 ├── result_reporter.py   # AnalysisResult 데이터 구조
-├── requirements.txt     # PyQt6, PyInstaller
+├── requirements.txt     # PyInstaller (tkinter는 Python 표준 라이브러리)
 ├── build.bat            # exe 빌드 스크립트
 └── tests/
     ├── test_log_parser.py
@@ -65,7 +65,7 @@ Claude_Pro/
 | `xlog_handler.py` | Xlog 필드1에서 릴레이 추적번호 추출 |
 | `trace_extractor.py` | step1/2/3 필터링 함수 |
 | `result_reporter.py` | `AnalysisResult` 집계 (매칭/미매칭/카운트) |
-| `app.py` | PyQt6 UI — 파일 선택, 키워드 입력, 결과 테이블 |
+| `app.py` | tkinter UI — 파일 선택, 키워드 입력, 결과 테이블 |
 
 ---
 
