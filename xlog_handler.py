@@ -1,15 +1,14 @@
 import re
 from log_parser import LogLine
 
-# Xlog 필드1의 릴레이 추적번호는 16자리 영숫자
-_TRACE_ID_PATTERN = re.compile(r'^[A-Za-z0-9]{16}$')
+# Xlog payload의 릴레이 추적번호: "TRACE_NO : ABCD1234EFGH5678" 형식
+_RELAY_PATTERN = re.compile(r'TRACE_NO\s*:\s*([A-Za-z0-9]{16})')
 
 
 def extract_relay_trace_id(line: LogLine) -> 'str | None':
-    """Xlog 파일에서만 field1이 릴레이 추적번호 역할을 하므로, 해당 값을 반환.
-    일반 파일이거나 field1이 추적번호 형식이 아니면 None 반환."""
+    """Xlog 파일의 payload에서 'TRACE_NO : XXXX' 형식의 릴레이 추적번호를 추출.
+    Xlog 파일이 아니거나 패턴이 없으면 None 반환."""
     if not line.is_xlog:
         return None
-    if _TRACE_ID_PATTERN.match(line.field1):
-        return line.field1
-    return None
+    match = _RELAY_PATTERN.search(line.payload)
+    return match.group(1) if match else None
