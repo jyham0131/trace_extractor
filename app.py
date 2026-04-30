@@ -1,4 +1,5 @@
 import sys
+import json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
@@ -14,6 +15,9 @@ class App(tk.Tk):
         self.title("로그 분석기")
         self.minsize(1100, 720)
         self._log_files: dict[str, str] = {}
+        self._unmatched_all_ids: list[str] = []         # 검색 초기화용 전체 미매칭 목록
+        self._unmatched_step2_mapping: dict[str, str] = {}  # 릴레이→원본 추적번호 매핑
+        self._kw_config = self._load_keywords()
         self._apply_style()
         self._build_ui()
 
@@ -116,14 +120,25 @@ class App(tk.Tk):
         col2.pack(side="left", fill="both", expand=True, padx=(0, 10))
         ttk.Label(col2, text="2단계 · 키워드").pack(anchor="w")
         self._kw2_var = tk.StringVar()
-        ttk.Entry(col2, textvariable=self._kw2_var).pack(fill="x")
+        self._kw2_combo = ttk.Combobox(col2, textvariable=self._kw2_var,
+                                       values=self._kw_config["step2"])
+        self._kw2_combo.pack(fill="x")
 
         # 3단계 - 키워드
         col3 = ttk.Frame(inner)
         col3.pack(side="left", fill="both", expand=True, padx=(0, 10))
         ttk.Label(col3, text="3단계 · 키워드").pack(anchor="w")
         self._kw3_var = tk.StringVar()
-        ttk.Entry(col3, textvariable=self._kw3_var).pack(fill="x")
+        self._kw3_combo = ttk.Combobox(col3, textvariable=self._kw3_var,
+                                       values=self._kw_config["step3"])
+        self._kw3_combo.pack(fill="x")
+
+        # 키워드 관리 버튼
+        col_mgr = ttk.Frame(inner)
+        col_mgr.pack(side="left", padx=(0, 10))
+        ttk.Label(col_mgr, text="").pack()
+        ttk.Button(col_mgr, text="⚙ 키워드 관리",
+                   command=self._open_keyword_manager).pack()
 
         # 분석 버튼
         col4 = ttk.Frame(inner)
@@ -143,17 +158,29 @@ class App(tk.Tk):
         self._notebook.add(tab_matched, text="  ✅  매칭  (0건)  ")
         self._matched_tree = self._make_tree(
             tab_matched,
-            columns=["파일명", "타임스탬프", "추적번호", "내용"],
-            widths=[130, 150, 160, 500],
+            columns=["파일명", "타임스탬프", "프로세스번호", "추적번호", "원본 추적번호", "내용"],
+            widths=[130, 150, 110, 160, 160, 500],
         )
 
         # 미매칭 탭
         tab_unmatched = ttk.Frame(self._notebook)
         self._notebook.add(tab_unmatched, text="  ❌  미매칭  (0건)  ")
+
+        # 미매칭 탭 전용 검색 바 (기존 분석 로직과 완전히 독립)
+        search_bar = ttk.Frame(tab_unmatched)
+        search_bar.pack(fill="x", padx=6, pady=(6, 2))
+        ttk.Label(search_bar, text="검색:").pack(side="left", padx=(0, 4))
+        self._unmatched_search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_bar, textvariable=self._unmatched_search_var, width=30)
+        search_entry.pack(side="left", padx=(0, 4))
+        search_entry.bind("<Return>", lambda *_: self._filter_unmatched())
+        ttk.Button(search_bar, text="검색", command=self._filter_unmatched).pack(side="left", padx=(0, 4))
+        ttk.Button(search_bar, text="초기화", command=self._reset_unmatched_filter).pack(side="left")
+
         self._unmatched_tree = self._make_tree(
             tab_unmatched,
-            columns=["미매칭 추적번호"],
-            widths=[300],
+            columns=["미매칭 추적번호", "원본 추적번호"],
+            widths=[300, 300],
         )
 
     def _make_tree(self, parent, columns: list[str], widths: list[int]) -> ttk.Treeview:
@@ -172,13 +199,17 @@ class App(tk.Tk):
         tree.pack(fill="both", expand=True)
 
         for col, width in zip(columns, widths):
-            tree.heading(col, text=col, anchor="w")
+            tree.heading(col, text=col, anchor="w",
+                         command=lambda c=col, t=tree: self._copy_column(t, c))
             tree.column(col, width=width, anchor="w", minwidth=60)
 
         # 짝수 행 배경색 교차
         tree.tag_configure("even", background="#f6f8fa")
         tree.tag_configure("odd",  background="#ffffff")
         tree.tag_configure("red",  foreground="#cf222e")
+
+        # 셀 더블클릭 → 해당 셀 값 클립보드 복사
+        tree.bind("<Double-1>", lambda e, t=tree: self._on_cell_double_click(e, t))
 
         return tree
 
@@ -235,12 +266,14 @@ class App(tk.Tk):
 
         # 3단계 분석
         step1 = step1_filter(all_lines, trace_ids)
-        step2_traces = step2_find_new_traces(step1, kw2)
+        step2_mapping = step2_find_new_traces(step1, kw2)
+        step2_traces = set(step2_mapping.keys())
         matched, unmatched_ids = step3_match(all_lines, step2_traces, kw3)
 
         result = AnalysisResult(
             step1_lines=step1,
             step2_traces=step2_traces,
+            step2_mapping=step2_mapping,
             matched_lines=matched,
             unmatched_trace_ids=unmatched_ids,
         )
@@ -253,16 +286,22 @@ class App(tk.Tk):
         self._clear_tree(self._matched_tree)
         for i, line in enumerate(result.matched_lines):
             tag = "even" if i % 2 == 0 else "odd"
+            origin = result.step2_mapping.get(line.trace_id, "")
             self._matched_tree.insert(
                 "", "end",
-                values=(line.source_file, line.timestamp, line.trace_id, line.payload),
+                values=(line.source_file, line.timestamp, line.field1,
+                        line.trace_id, origin, line.payload),
                 tags=(tag,)
             )
 
         # 미매칭 테이블
+        self._unmatched_all_ids = sorted(result.unmatched_trace_ids)
+        self._unmatched_step2_mapping = result.step2_mapping
+        self._unmatched_search_var.set("")
         self._clear_tree(self._unmatched_tree)
-        for i, tid in enumerate(sorted(result.unmatched_trace_ids)):
-            self._unmatched_tree.insert("", "end", values=(tid,), tags=("red",))
+        for tid in self._unmatched_all_ids:
+            origin = self._unmatched_step2_mapping.get(tid, "")
+            self._unmatched_tree.insert("", "end", values=(tid, origin), tags=("red",))
 
         # 탭 제목 갱신
         self._notebook.tab(0, text=f"  ✅  매칭  ({result.matched_count}건)  ")
@@ -272,6 +311,154 @@ class App(tk.Tk):
         self._notebook.select(0 if result.matched_count > 0 else 1)
 
         self._set_status(result.summary)
+
+    def _on_cell_double_click(self, event: tk.Event, tree: ttk.Treeview):
+        """더블클릭한 셀의 값을 클립보드에 복사."""
+        if tree.identify_region(event.x, event.y) != "cell":
+            return
+        row = tree.identify_row(event.y)
+        col = tree.identify_column(event.x)
+        if not row:
+            return
+        col_idx = int(col[1:]) - 1
+        values = tree.item(row, "values")
+        if col_idx < len(values):
+            self.clipboard_clear()
+            self.clipboard_append(str(values[col_idx]))
+            self._set_status(f"복사됨: {values[col_idx]}")
+
+    # ── 열 헤더 클릭 → 해당 열 전체 복사 ────────────────────
+
+    def _copy_column(self, tree: ttk.Treeview, col: str):
+        col_idx = list(tree["columns"]).index(col)
+        rows = tree.get_children()
+        values = [str(tree.item(row, "values")[col_idx]) for row in rows]
+        tree.selection_set(rows)
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(values))
+        self._set_status(f"'{col}' 열 {len(values)}개 값 복사됨")
+
+    # ── 미매칭 검색 (기존 분석 로직과 독립) ─────────────────
+
+    def _filter_unmatched(self):
+        keyword = self._unmatched_search_var.get().strip().lower()
+        self._clear_tree(self._unmatched_tree)
+        for tid in self._unmatched_all_ids:
+            origin = self._unmatched_step2_mapping.get(tid, "")
+            if keyword in tid.lower() or keyword in origin.lower():
+                self._unmatched_tree.insert("", "end", values=(tid, origin), tags=("red",))
+
+    def _reset_unmatched_filter(self):
+        self._unmatched_search_var.set("")
+        self._clear_tree(self._unmatched_tree)
+        for tid in self._unmatched_all_ids:
+            origin = self._unmatched_step2_mapping.get(tid, "")
+            self._unmatched_tree.insert("", "end", values=(tid, origin), tags=("red",))
+
+    # ── 키워드 config 관리 ────────────────────────────────
+
+    @staticmethod
+    def _config_path() -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent / "keywords_config.json"
+        return Path(__file__).parent / "keywords_config.json"
+
+    def _load_keywords(self) -> dict[str, list[str]]:
+        default: dict[str, list[str]] = {"step2": [], "step3": []}
+        try:
+            data = json.loads(self._config_path().read_text(encoding="utf-8"))
+            return {"step2": list(data.get("step2", [])),
+                    "step3": list(data.get("step3", []))}
+        except (FileNotFoundError, json.JSONDecodeError):
+            return default
+
+    def _save_keywords(self):
+        self._config_path().write_text(
+            json.dumps(self._kw_config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _refresh_comboboxes(self):
+        self._kw2_combo["values"] = self._kw_config["step2"]
+        self._kw3_combo["values"] = self._kw_config["step3"]
+
+    def _open_keyword_manager(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("키워드 관리")
+        dlg.resizable(True, False)
+        dlg.grab_set()
+
+        for step, label in [("step2", "2단계 키워드"), ("step3", "3단계 키워드")]:
+            grp = ttk.LabelFrame(dlg, text=f" {label} ")
+            grp.pack(fill="both", expand=True, padx=12, pady=(8, 4))
+
+            lb_wrap = ttk.Frame(grp)
+            lb_wrap.pack(fill="both", expand=True)
+            lb = tk.Listbox(lb_wrap, selectmode="single", height=7, width=42,
+                            font=("맑은 고딕", 10))
+            vsb = ttk.Scrollbar(lb_wrap, orient="vertical", command=lb.yview)
+            lb.configure(yscrollcommand=vsb.set)
+            vsb.pack(side="right", fill="y")
+            lb.pack(side="left", fill="both", expand=True)
+
+            for kw in self._kw_config[step]:
+                lb.insert("end", kw)
+
+            entry_var = tk.StringVar()
+
+            def on_select(_, lbx=lb, ev=entry_var):
+                sel = lbx.curselection()
+                if sel:
+                    ev.set(lbx.get(sel[0]))
+
+            lb.bind("<<ListboxSelect>>", on_select)
+
+            btn_row = ttk.Frame(grp)
+            btn_row.pack(fill="x", pady=(6, 4))
+
+            entry = ttk.Entry(btn_row, textvariable=entry_var, width=26)
+            entry.pack(side="left", padx=(0, 6))
+
+            def do_add(s=step, lbx=lb, ev=entry_var):
+                kw = ev.get().strip()
+                if not kw or kw in self._kw_config[s]:
+                    return
+                self._kw_config[s].append(kw)
+                lbx.insert("end", kw)
+                ev.set("")
+                self._save_keywords()
+                self._refresh_comboboxes()
+
+            def do_edit(s=step, lbx=lb, ev=entry_var):
+                sel = lbx.curselection()
+                kw = ev.get().strip()
+                if not sel or not kw:
+                    return
+                idx = sel[0]
+                self._kw_config[s][idx] = kw
+                lbx.delete(idx)
+                lbx.insert(idx, kw)
+                lbx.selection_set(idx)
+                self._save_keywords()
+                self._refresh_comboboxes()
+
+            def do_del(s=step, lbx=lb, ev=entry_var):
+                sel = lbx.curselection()
+                if not sel:
+                    return
+                idx = sel[0]
+                self._kw_config[s].pop(idx)
+                lbx.delete(idx)
+                ev.set("")
+                self._save_keywords()
+                self._refresh_comboboxes()
+
+            entry.bind("<Return>", lambda *_, f=do_add: f())
+            ttk.Button(btn_row, text="추가", command=do_add).pack(side="left", padx=(0, 4))
+            ttk.Button(btn_row, text="수정", command=do_edit).pack(side="left", padx=(0, 4))
+            ttk.Button(btn_row, text="삭제", command=do_del).pack(side="left")
+
+        ttk.Button(dlg, text="닫기", command=dlg.destroy).pack(pady=8)
 
     # ── 유틸 ─────────────────────────────────────────────
 

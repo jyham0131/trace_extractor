@@ -8,17 +8,17 @@ def step1_filter(all_lines: list[LogLine], trace_ids: list[str]) -> list[LogLine
     return [line for line in all_lines if line.trace_id in trace_set]
 
 
-def step2_find_new_traces(step1_lines: list[LogLine], keyword: str) -> set[str]:
+def step2_find_new_traces(step1_lines: list[LogLine], keyword: str) -> dict[str, str]:
     """1단계 결과에서 keyword를 포함하는 Xlog 라인의 릴레이 추적번호를 수집.
-    keyword가 비어있으면 모든 Xlog 라인에서 수집."""
-    new_traces: set[str] = set()
+    반환: {릴레이추적번호: 원본추적번호} — 어느 1단계 추적번호에서 파생됐는지 추적."""
+    mapping: dict[str, str] = {}
     for line in step1_lines:
         if keyword and keyword not in line.raw:
             continue
         relay = extract_relay_trace_id(line)
         if relay:
-            new_traces.add(relay)
-    return new_traces
+            mapping[relay] = line.trace_id
+    return mapping
 
 
 def step3_match(

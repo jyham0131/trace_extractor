@@ -28,3 +28,12 @@ env/
 # 테스트 캐시
 .pytest_cache/
 .coverage
+
+# 사용자별 키워드 설정 (로컬 전용)
+keywords_config.json
+
+# 빌드 압축 산출물
+*.7z
+
+# Claude Code 로컬 설정
+.claude/

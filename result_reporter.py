@@ -6,6 +6,7 @@ from log_parser import LogLine
 class AnalysisResult:
     step1_lines: list[LogLine] = field(default_factory=list)
     step2_traces: set[str] = field(default_factory=set)
+    step2_mapping: dict[str, str] = field(default_factory=dict)  # 릴레이추적번호 → 원본추적번호
     matched_lines: list[LogLine] = field(default_factory=list)
     unmatched_trace_ids: set[str] = field(default_factory=set)
 
