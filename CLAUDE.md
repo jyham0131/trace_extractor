@@ -19,11 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 필드 0: 타임스탬프 `[YYMMDD HH:MM:SS.mmm]`
 - 필드 1: 프로세스 번호 `[ NNNN ]`
 - 필드 2: 추적번호 16자리 `[XXXXXXXXXXXXXXXX]`
-- 필드 3~: 페이로드 데이터
-
-### Xlog 파일 특이사항
-
-- 파일명이 `Xlog`로 시작하는 파일(대소문자 무관)은 **payload** 안에 `TRACE_NO : <16자리추적번호>` 형식으로 릴레이 추적번호가 포함된다.
+- 필드 3~: 페이로드 데이- 파일명이 `Xlog`로 시작하는 파일(대소문자 무관)은 **payload** 안에 `TRACE_NO : <16자리추적번호>` 형식으로 릴레이 추적번호가 포함된다.
   - 예: `[260426 21:56:17.725] [kcppg11  ] [기존추적번호] MSG__REQ__CHK ▷ TRACE_NO : ABCD1234EFGH5678`
 - 필드1은 일반 파일과 동일하게 프로세스 번호이며 릴레이 추적번호로 사용되지 않는다.
 
@@ -111,6 +107,16 @@ pyinstaller --onefile --windowed --name LogAnalyzer app.py
 ## 코딩 규칙
 
 - **언어**: Python 3.9+, 타입힌트 필수
+
+# 린트
+flake8 . --max-line-length=100
+```
+
+---
+
+## 코딩 규칙
+
+- **언어**: Python 3.10+, 타입힌트 필수
 - **주석**: 한국어 (WHY 중심)
 - **스타일**: 함수 단일 책임, 20줄 이하 권장
 - **데이터 모델**: `dataclass` 사용, dict 직접 노출 지양

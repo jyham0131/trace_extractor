@@ -7,6 +7,8 @@ from pathlib import Path
 from log_parser import parse_file_content
 from trace_extractor import step1_filter, step2_find_new_traces, step3_match
 from result_reporter import AnalysisResult
+from ulog_parser import parse_file_content as ulog_parse_file
+from ulog_extractor import collect_keywords, extract_by_keywords
 
 
 class App(tk.Tk):
@@ -15,6 +17,8 @@ class App(tk.Tk):
         self.title("로그 분석기")
         self.minsize(1100, 720)
         self._log_files: dict[str, str] = {}
+        self._ulog_files: dict[str, str] = {}
+        self._last_result = None
         self._unmatched_all_ids: list[str] = []         # 검색 초기화용 전체 미매칭 목록
         self._unmatched_step2_mapping: dict[str, str] = {}  # 릴레이→원본 추적번호 매핑
         self._kw_config = self._load_keywords()
@@ -85,16 +89,23 @@ class App(tk.Tk):
         frame = ttk.LabelFrame(parent, text=" 로그 파일 ")
         frame.pack(fill="x", pady=(0, 8))
 
-        inner = ttk.Frame(frame)
-        inner.pack(fill="x", padx=4)
-
-        btn = ttk.Button(inner, text="📂  파일 선택", command=self._select_files)
-        btn.pack(side="left", padx=(0, 10))
-
+        # slog 파일 행
+        row1 = ttk.Frame(frame)
+        row1.pack(fill="x", padx=4, pady=(0, 4))
+        ttk.Button(row1, text="📂  slog 파일 선택", command=self._select_files).pack(side="left", padx=(0, 10))
         self._file_var = tk.StringVar(value="선택된 파일 없음")
-        lbl = ttk.Label(inner, textvariable=self._file_var, foreground="#57606a",
-                        font=("맑은 고딕", 9))
-        lbl.pack(side="left", fill="x", expand=True)
+        ttk.Label(row1, textvariable=self._file_var, foreground="#57606a",
+                  font=("맑은 고딕", 9)).pack(side="left", fill="x", expand=True)
+
+        # ulog 파일 행
+        row2 = ttk.Frame(frame)
+        row2.pack(fill="x", padx=4)
+        ttk.Button(row2, text="📂  ulog 파일 선택", command=self._select_ulog_files).pack(side="left", padx=(0, 10))
+        self._ulog_file_var = tk.StringVar(value="선택된 파일 없음")
+        ttk.Label(row2, textvariable=self._ulog_file_var, foreground="#57606a",
+                  font=("맑은 고딕", 9)).pack(side="left", fill="x", expand=True)
+        ttk.Button(row2, text="📋  ulog 분석",
+                   command=self._on_ulog_analysis_click).pack(side="right", padx=(10, 0))
 
     def _build_condition_section(self, parent):
         frame = ttk.LabelFrame(parent, text=" 분석 조건 ")
@@ -144,7 +155,7 @@ class App(tk.Tk):
         col4 = ttk.Frame(inner)
         col4.pack(side="left")
         ttk.Label(col4, text="").pack()   # 라벨과 높이 맞추기
-        btn = ttk.Button(col4, text="🔍  분석 시작",
+        btn = ttk.Button(col4, text="🔍  slog 분석",
                          style="Primary.TButton",
                          command=self._run_analysis)
         btn.pack(ipadx=4, ipady=2)
@@ -183,6 +194,15 @@ class App(tk.Tk):
             widths=[300, 300],
         )
 
+        # ulog 매칭 탭
+        tab_ulog = ttk.Frame(self._notebook)
+        self._notebook.add(tab_ulog, text="  📋  ulog  (0건)  ")
+        self._ulog_tree = self._make_tree(
+            tab_ulog,
+            columns=["파일명", "타임스탬프", "프로세스번호", "추적번호", "원본 추적번호", "내용"],
+            widths=[130, 150, 110, 160, 160, 500],
+        )
+
     def _make_tree(self, parent, columns: list[str], widths: list[int]) -> ttk.Treeview:
         frame = ttk.Frame(parent)
         frame.pack(fill="both", expand=True)
@@ -201,7 +221,7 @@ class App(tk.Tk):
         for col, width in zip(columns, widths):
             tree.heading(col, text=col, anchor="w",
                          command=lambda c=col, t=tree: self._copy_column(t, c))
-            tree.column(col, width=width, anchor="w", minwidth=60)
+            tree.column(col, width=width, anchor="w", minwidth=60, stretch=tk.NO)
 
         # 짝수 행 배경색 교차
         tree.tag_configure("even", background="#f6f8fa")
@@ -242,6 +262,27 @@ class App(tk.Tk):
         self._file_var.set(f"{len(self._log_files)}개 파일 선택됨  —  {names}")
         self._set_status(f"{len(self._log_files)}개 파일 로드 완료.")
 
+    def _select_ulog_files(self):
+        paths = filedialog.askopenfilenames(title="ulog 파일 선택")
+        if not paths:
+            return
+
+        self._ulog_files.clear()
+        failed = []
+        for path in paths:
+            try:
+                content = self._read_ulog_file(path)
+                self._ulog_files[Path(path).name] = content
+            except Exception as e:
+                failed.append(f"{Path(path).name}: {e}")
+
+        if failed:
+            messagebox.showwarning("파일 읽기 오류", "\n".join(failed))
+
+        names = "  |  ".join(self._ulog_files.keys())
+        self._ulog_file_var.set(f"{len(self._ulog_files)}개 파일 선택됨  —  {names}")
+        self._set_status(f"ulog {len(self._ulog_files)}개 파일 로드 완료.")
+
     def _run_analysis(self):
         if not self._log_files:
             messagebox.showwarning("경고", "로그 파일을 먼저 선택해주세요.")
@@ -277,6 +318,7 @@ class App(tk.Tk):
             matched_lines=matched,
             unmatched_trace_ids=unmatched_ids,
         )
+        self._last_result = result
         self._render_result(result)
 
     # ── 결과 렌더링 ───────────────────────────────────────
@@ -311,6 +353,53 @@ class App(tk.Tk):
         self._notebook.select(0 if result.matched_count > 0 else 1)
 
         self._set_status(result.summary)
+
+    # ── ulog 분석 ─────────────────────────────────────────
+
+    def _on_ulog_analysis_click(self):
+        if self._last_result is None:
+            messagebox.showwarning("경고", "먼저 slog 분석을 실행해주세요.")
+            return
+        self._run_ulog_analysis(self._last_result)
+
+    def _run_ulog_analysis(self, result: AnalysisResult):
+        if not self._ulog_files:
+            self._clear_tree(self._ulog_tree)
+            self._ulog_tree.insert("", "end",
+                                   values=("(파일 없음)", "", "", "", "", ""),
+                                   tags=("red",))
+            self._notebook.tab(2, text="  📋  ulog  (파일 없음)  ")
+            return
+
+        ulog_all = []
+        for filename, content in self._ulog_files.items():
+            ulog_all.extend(ulog_parse_file(content, filename))
+
+        trace_kws, proc_kws = collect_keywords(result)
+        matched = extract_by_keywords(ulog_all, trace_kws, proc_kws)
+
+        original_ids = {line.trace_id for line in result.step1_lines}
+
+        self._clear_tree(self._ulog_tree)
+        for i, line in enumerate(matched):
+            relay = next((tid for tid in result.step2_traces if tid in line.raw), "")
+            original = result.step2_mapping.get(relay) or next(
+                (tid for tid in original_ids if tid in line.raw), ""
+            )
+            tag = "even" if i % 2 == 0 else "odd"
+            if line.parsed:
+                values = (line.source_file, line.datetime, line.process, relay, original, line.content)
+            else:
+                values = (line.source_file, "", "", relay, original, line.raw)
+            self._ulog_tree.insert("", "end", values=values, tags=(tag,))
+
+        if matched:
+            max_len = max(
+                len(line.content if line.parsed else line.raw) for line in matched
+            )
+            self._ulog_tree.column("내용", width=max(500, max_len * 7))
+
+        self._notebook.tab(2, text=f"  ✅  ulog  ({len(matched)}건)  ")
 
     def _on_cell_double_click(self, event: tk.Event, tree: ttk.Treeview):
         """더블클릭한 셀의 값을 클립보드에 복사."""
@@ -477,7 +566,17 @@ class App(tk.Tk):
                 return Path(path).read_text(encoding=enc)
             except (UnicodeDecodeError, LookupError):
                 continue
-        return Path(path).read_text(encoding="utf-8", errors="replace")
+        return Path(path).read_text(encoding="euc-kr", errors="replace")
+
+    @staticmethod
+    def _read_ulog_file(path: str) -> str:
+        """UTF-8 실패 시 EUC-KR로 재시도. 최종 폴백도 EUC-KR."""
+        for enc in ("utf-8", "euc-kr", "cp949"):
+            try:
+                return Path(path).read_text(encoding=enc)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return Path(path).read_text(encoding="euc-kr", errors="replace")
 
 
 def main():
